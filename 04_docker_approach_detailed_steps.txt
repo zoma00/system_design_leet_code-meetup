@@ -1,0 +1,248 @@
+Detailed Steps for the Docker Approach
+
+Goal
+- Design a simplified LeetCode-like system using `Docker` for code execution and `PostgreSQL` for storage.
+
+1. User opens the platform
+
+- The user loads the web or mobile app.
+- The client sends a request to the backend API.
+- The backend returns a list of coding problems from `PostgreSQL`.
+
+Example
+- `GET /problems`
+
+2. User selects a problem
+
+- The client requests one problem by ID.
+- The backend returns:
+  - title
+  - description
+  - constraints
+  - sample input and output
+  - starter code for each supported language
+
+Example
+- `GET /problems/{problem_id}`
+
+3. User writes code
+
+- The user chooses a language such as `Python`, `Java`, or `C++`.
+- The client editor shows the matching starter template.
+- The user writes or edits the solution in the browser.
+
+4. User submits code
+
+- The client sends the source code to the backend.
+- The request includes:
+  - `user_id`
+  - `problem_id`
+  - `language`
+  - `source_code`
+  - `competition_id` if the user is in a contest
+
+Example
+- `POST /submissions`
+
+5. Backend validates the request
+
+- Check that the language is supported.
+- Check source code size limits.
+- Check the problem exists.
+- Check the contest is still active if this is a competition submission.
+
+If valid
+- Create a submission record in `PostgreSQL`.
+- Set status to `QUEUED`.
+
+Example submission fields
+- `submission_id`
+- `user_id`
+- `problem_id`
+- `language`
+- `status`
+- `created_at`
+
+6. Backend pushes the job to a queue
+
+- The submission service puts the job into a queue.
+- The queue decouples API traffic from code execution.
+- This protects the system during burst traffic.
+
+Queue message may contain
+- `submission_id`
+- `problem_id`
+- `language`
+- code storage reference
+
+Why this step matters
+- API requests should stay fast.
+- Code execution may take seconds.
+- Many users may submit at the same time.
+
+7. Judge worker receives the job
+
+- A judge worker listens to the queue.
+- When it receives a job, it loads:
+  - submission metadata
+  - source code
+  - test cases for the problem
+
+The worker then prepares to run the code inside Docker.
+
+8. Select the correct Docker image
+
+- Each language has its own Docker image.
+
+Examples
+- `python-runner`
+- `java-runner`
+- `cpp-runner`
+
+Each image contains
+- compiler or interpreter
+- required runtime
+- execution script
+- safe default configuration
+
+9. Start a fresh Docker container
+
+- The worker starts a new Docker container for that submission.
+- The container is temporary and used only once.
+
+Container restrictions
+- limited CPU
+- limited memory
+- execution timeout
+- no outbound network
+- read-only base filesystem when possible
+- cleanup after execution
+
+Why
+- user code is untrusted
+- every run should be isolated
+
+10. Inject source code and test cases
+
+- The worker mounts or copies the source code into the container.
+- It also provides the problem test cases.
+- Usually hidden test cases stay on the server side and are not exposed to the client.
+
+11. Compile the code if needed
+
+- Compiled languages like `C++` and `Java` need a compile step first.
+- Interpreted languages like `Python` skip compile and go directly to execution.
+
+Possible compile outcomes
+- compile success
+- compile error
+
+If compile fails
+- save verdict as `COMPILE_ERROR`
+- store the error output
+- stop processing
+
+12. Run the code against test cases
+
+- If compile succeeds, the worker runs the program.
+- The code is tested against sample and hidden test cases.
+
+Possible execution outcomes
+- `ACCEPTED`
+- `WRONG_ANSWER`
+- `TIME_LIMIT_EXCEEDED`
+- `MEMORY_LIMIT_EXCEEDED`
+- `RUNTIME_ERROR`
+
+Metrics captured
+- runtime in milliseconds
+- memory usage
+- number of passed test cases
+
+13. Save the final result
+
+- After execution ends, the worker writes the final result to `PostgreSQL`.
+- Update the submission status from `RUNNING` to `DONE`.
+- Save verdict and performance details.
+
+Example stored result
+- `verdict = ACCEPTED`
+- `runtime_ms = 124`
+- `memory_kb = 20480`
+
+14. Return feedback to the user
+
+- The client can poll submission status.
+- Better option: push updates using `WebSocket` or `SSE`.
+
+Status flow
+- `QUEUED`
+- `RUNNING`
+- `DONE`
+
+This gives the user near-instant progress feedback.
+
+15. Update leaderboard if this is a contest
+
+- If the submission belongs to a competition, the system updates the user score.
+- Basic scoring data can be stored in `PostgreSQL`.
+- For high traffic, use `Redis` for the live leaderboard and sync results back to SQL.
+
+Leaderboard update may depend on
+- solved count
+- penalty time
+- accepted timestamp
+
+16. Clean up the Docker container
+
+- After execution, destroy the container.
+- Remove temporary files.
+- Free memory and CPU resources.
+
+Why
+- avoid resource leaks
+- avoid cross-submission contamination
+
+17. Scale the system
+
+To scale this Docker approach:
+- add more API servers
+- add more judge worker machines
+- run more Docker containers in parallel
+- add read replicas for `PostgreSQL`
+- add `Redis` for hot cache and leaderboard speed
+
+18. Failure handling
+
+If container hangs
+- kill it on timeout
+
+If worker crashes
+- retry job from queue
+
+If database is slow
+- use caching for problem reads
+
+If queue grows too large
+- add more judge workers
+
+19. Why this Docker approach is practical
+
+- simple to explain
+- easy to implement compared to Kubernetes
+- supports multiple languages cleanly
+- good for MVP or medium-scale systems
+
+20. Short final summary
+
+The Docker approach works like this:
+- user submits code
+- backend stores submission
+- queue holds the job
+- judge worker starts a Docker container
+- code is compiled and executed safely
+- result is saved in `PostgreSQL`
+- user receives feedback
+- leaderboard is updated if needed
+
+This is the most practical first version for a LeetCode-like platform.

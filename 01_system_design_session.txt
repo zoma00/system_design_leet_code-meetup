@@ -1,0 +1,401 @@
+LeetCode System Design
+
+
+
+Core problem :
+====================
+The problem is to design a simplified LeetCode-like system.
+
+In short, users should be able to:
+- browse coding problems
+- open a problem and write code in different languages
+- submit code and get fast feedback
+- see a live competition leaderboard
+
+The main design challenge is handling large numbers of users while safely running untrusted code and keeping submission results and leaderboard updates fast.
+
+
+
+
+
+
+
+
+Source prompt:
+https://www.hellointerview.com/learn/system-design/problem-breakdowns/leetcode
+
+1. Scope
+
+Functional requirements
+- Users can browse a list of coding problems.
+- Users can open one problem and write code in multiple languages.
+- Users can submit code and receive near-instant feedback.
+- Users can view a live leaderboard during competitions.
+
+Out of scope
+- Authentication
+- User profiles
+- Payments
+- Analytics
+- Social features
+
+Assumption
+- The user is already authenticated and the API receives `user_id` from session or JWT.
+
+2. Non-functional requirements
+
+- Prioritize availability over strict consistency.
+- Submission results should usually return within 5 seconds.
+- The judge must safely isolate untrusted user code.
+- The system should support competitions with up to 100,000 concurrent users.
+- Read traffic will be much higher than write traffic except during contest bursts.
+
+3. Capacity assumptions
+
+- 100,000 concurrent users during a contest.
+- 90% are browsing or polling leaderboard.
+- 10% may submit within a short burst.
+- Peak submissions: about 2,000 to 5,000 per minute in heavy contest windows.
+- Average source payload per submission is small, usually less than 100 KB.
+- Problem statements are read-heavy and cacheable.
+
+This means the hardest part is not storing problem text. The hardest part is bursty code execution and real-time leaderboard updates.
+
+4. High-level architecture
+
+Clients
+- Web app / mobile app
+
+Core backend services
+- API Gateway
+- Problem Service
+- Submission Service
+- Judge Orchestrator
+- Leaderboard Service
+- WebSocket / SSE Gateway
+
+Data systems
+==============
+- PostgreSQL for core relational data
+- Redis for cache, rate limiting, submission status cache, and live leaderboard
+- Kafka or SQS for submission jobs and result events
+- Object storage for problem assets, test cases, and large submission artifacts
+
+Execution layer
+- Sandbox Worker Pool on Kubernetes
+- Each worker runs code inside isolated microVMs or hardened containers
+
+High-level flow
+1. User fetches problems from Problem Service.
+2. User submits code to Submission Service.
+3. Submission Service stores metadata and pushes a job to the queue.
+4. Judge Orchestrator assigns the job to an available sandbox worker.
+5. Worker compiles and runs code against test cases.
+6. Result is stored and published as an event.
+7. Submission status is pushed back to the user.
+8. If the submission belongs to a competition, Leaderboard Service updates live rank.
+
+5. APIs
+
+- GET /problems?page=1&difficulty=medium&tag=dp
+- GET /problems/{problem_id}
+- POST /submissions
+  - body: problem_id, language, source_code, competition_id optional
+- GET /submissions/{submission_id}
+- GET /competitions/{competition_id}/leaderboard
+- GET /competitions/{competition_id}/leaderboard/stream
+
+For submission updates, polling works, but WebSocket or SSE is better for fast status transitions such as queued -> running -> accepted.
+
+6. Data model
+
+Tables
+
+`problems`
+- problem_id
+- title
+- description
+- difficulty
+- tags
+- starter_code_by_language
+- constraints
+- created_at
+
+`problem_test_case_sets`
+- set_id
+- problem_id
+- version
+- visibility public or hidden
+- storage_path
+
+`submissions`
+- submission_id
+- user_id
+- problem_id
+- competition_id nullable
+- language
+- source_code_path
+- status
+- verdict
+- runtime_ms
+- memory_kb
+- created_at
+- completed_at
+
+`submission_results`
+- submission_id
+- test_case_count
+- passed_count
+- compile_output
+- error_output
+
+`competitions`
+- competition_id
+- start_time
+- end_time
+- scoring_rule
+
+`competition_scores`
+- competition_id
+- user_id
+- solved_count
+- penalty_score
+- last_updated_at
+
+Redis
+- `problem:{id}` cached problem payload
+- `submission:{id}:status`
+- `leaderboard:{competition_id}` as sorted set
+
+7. Problem browsing design
+
+Problem browsing is straightforward and read-heavy.
+
+Design
+- Store metadata in PostgreSQL.
+- Cache hot problem lists and individual problems in Redis.
+- Put static assets and problem statements behind CDN if rendered as static blobs.
+- Use read replicas for large browse traffic.
+
+Why this works
+- Problems change rarely.
+- Cache hit ratio should be high.
+- This keeps the primary database free for writes from submissions and contests.
+
+8. Submission and judging design
+
+This is the core of the system.
+
+Submission flow
+1. Client sends code to Submission Service.
+2. Submission Service validates language, size limits, and contest rules.
+3. It writes a `submissions` row with status `QUEUED`.
+4. Source code is stored in object storage or durable blob storage.
+5. A message is published to the submission queue.
+6. Judge Orchestrator pulls jobs and schedules them to workers.
+7. Worker fetches source code and test case bundle.
+8. Worker compiles and runs code inside a sandbox.
+9. Worker streams intermediate status and writes final verdict.
+10. Result event is emitted for client notification and leaderboard update.
+
+Why async queueing is required
+- Submission traffic is bursty.
+- Execution can take seconds.
+- Queueing smooths spikes and protects the API tier.
+
+9. Sandbox and security
+
+User code is untrusted. Isolation is a hard requirement.
+
+Execution safety controls
+- Run each submission in a fresh sandbox.
+- Disable outbound network access.
+- Use read-only base filesystem.
+- Apply CPU, memory, process count, and wall-clock limits.
+- Use seccomp/AppArmor and container runtime isolation.
+- Prefer Firecracker microVMs or gVisor-class isolation for stronger boundaries.
+- Destroy sandbox after execution.
+
+Abuse protection
+- Per-user submission rate limits
+- Max source size limits
+- Max compile/runtime thresholds
+- Malware and forbidden syscall monitoring
+
+10. How to hit the 5-second feedback target
+
+The 5-second target is mainly for common accepted or rejected runs, not worst-case jobs.
+
+Optimizations
+- Keep workers pre-warmed by language.
+- Maintain prebuilt language images.
+- Split visible sample tests from full hidden tests.
+- Return quick status immediately: queued or running.
+- Run small sample tests first for fast feedback.
+- Compile caches for popular languages where safe.
+- Autoscale workers based on queue depth.
+
+Practical behavior
+- Many submissions can get preliminary feedback in 1 to 3 seconds.
+- Full hidden test execution may take longer for heavy problems, but most interview answers accept this if you clearly separate quick feedback from final verdict.
+
+11. Leaderboard design
+
+Competition leaderboard traffic is read-heavy and latency-sensitive.
+
+Approach
+- Keep the live leaderboard in Redis sorted sets.
+- Score key example: `leaderboard:{competition_id}`.
+- Member: `user_id`.
+- Score: derived from solved count and penalty.
+
+Update flow
+1. Submission result event is published.
+2. Leaderboard Service consumes the event.
+3. If the submission changes contest score, update Redis sorted set.
+4. Push rank delta to connected clients through WebSocket or SSE.
+5. Periodically persist aggregate scores back to PostgreSQL.
+
+Why Redis
+- Sorted sets support fast top-K reads and rank lookups.
+- Eventual consistency is acceptable for live leaderboards.
+- It handles far more reads than a relational database under contest load.
+
+Tie-breaking
+- Primary: solved count
+- Secondary: penalty time
+- Tertiary: earliest last accepted timestamp
+
+If ranking formula is complex, store a normalized composite score in Redis and keep exact contest state in PostgreSQL.
+
+12. Real-time delivery to clients
+
+Use WebSocket or SSE for:
+- submission state changes
+- live leaderboard updates
+
+Why not only polling
+- Polling is simpler but wasteful at 100,000 concurrent users.
+- A persistent stream reduces repeated reads and improves user experience.
+
+Fallback
+- Polling can remain as a backup for clients that cannot hold a stream.
+
+13. Scaling strategy
+
+Stateless services
+- API Gateway, Problem Service, Submission Service, Leaderboard Service scale horizontally.
+
+Databases
+- PostgreSQL primary plus read replicas
+- Partition submissions by time or competition_id once volume grows
+
+Queue
+- Kafka if event fan-out and replay matter
+- SQS or RabbitMQ if simpler managed queueing is preferred
+
+Workers
+- Autoscale based on queue lag, worker CPU, and average job age
+
+Cache
+- Redis cluster for leaderboard and hot problem reads
+
+14. Failure handling
+
+If Redis fails
+- Leaderboard can temporarily degrade to slightly stale reads from PostgreSQL.
+
+If a worker crashes
+- Job timeout returns it to queue or marks it for retry.
+
+If queue backs up
+- Show queued status to users and scale worker pool.
+
+If result delivery fails
+- Client can still fetch status using GET /submissions/{id}.
+
+15. Consistency choices
+
+Availability over consistency is the right tradeoff here.
+
+Examples
+- Problem list can be slightly stale.
+- Leaderboard can be eventually consistent by a few seconds.
+- Submission final verdict must be durable once completed.
+
+So:
+- Use strong consistency for submission record writes.
+- Use eventual consistency for leaderboard propagation and cached reads.
+
+16. Bottlenecks and mitigations
+
+Bottleneck: contest submission spikes
+- Mitigation: queue, autoscaling workers, per-language worker pools
+
+Bottleneck: expensive sandbox startup
+- Mitigation: pre-warmed sandboxes or lightweight microVM snapshots
+
+Bottleneck: leaderboard fan-out
+- Mitigation: Redis sorted sets plus WebSocket broadcast tier
+
+Bottleneck: hot problems
+- Mitigation: CDN plus Redis cache
+
+17. Tradeoffs to call out in an interview
+
+Async judging vs synchronous judging
+- Async is more scalable and resilient.
+- Sync is simpler but fails under burst load.
+
+Containers vs microVMs
+- Containers are faster.
+- MicroVMs provide stronger isolation.
+
+Polling vs WebSocket
+- Polling is simpler.
+- WebSocket or SSE is better for live contests and status updates.
+
+Redis leaderboard vs SQL leaderboard
+- Redis is better for live ranking.
+- SQL remains the source of truth for durable contest history.
+
+18. Final interview summary
+
+I would design LeetCode as a read-heavy problem platform with an async submission pipeline and a separate real-time leaderboard path.
+
+The key design decisions are:
+- cache problem content aggressively
+- decouple submissions through a queue
+- run code in isolated sandboxes
+- use Redis sorted sets for live leaderboards
+- push updates with WebSocket or SSE
+- keep PostgreSQL as the durable system of record
+
+If time remains in the interview, the best deep-dive areas are:
+- sandbox security
+- worker autoscaling
+- leaderboard ranking semantics
+- fast feedback versus final verdict
+
+
+
+
+
+
+
+
+
+
+
+                                                    ════════════════
+                                                    --- summary ---
+                                                    ════════════════
+
+
+Primary finding: the original draft stopped at requirements and never actually designed the system. For a meetup or interview, that would be the main weakness because it omitted the judging pipeline, sandboxing model, live leaderboard path, data model, and scaling/failure tradeoffs.
+
+I replaced it with a complete interview-ready solution in [system_design_session.txt](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:1). The strongest sections are the high-level architecture and APIs ([line 43](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:43), [line 76](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:76)), the async submission and sandboxed judge design ([line 163](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:163), [line 184](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:184)), and the live leaderboard plus realtime delivery approach ([line 220](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:220), [line 249](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:249)). I also added scaling, failure handling, and tradeoffs so you have material for follow-up questions ([line 262](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:262), [line 281](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:281), [line 322](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:322)).
+
+One point to present carefully: the “within 5 seconds” requirement should be framed as typical feedback latency, not a hard guarantee for every heavy submission. The file now handles that correctly by separating quick feedback from full hidden-test execution ([line 203](/home/hazem-elbatawy/Downloads/Events/meetup/system_design_leet_code/system_design_session.txt:203)).
+
+No automated tests were run because this was a document rewrite, not executable code.

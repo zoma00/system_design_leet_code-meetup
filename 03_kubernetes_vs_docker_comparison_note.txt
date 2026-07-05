@@ -1,0 +1,64 @@
+Kubernetes vs Docker for LeetCode System Design
+
+1. Kubernetes-based approach
+
+Use `Kubernetes` to run and manage a large pool of judge workers.
+Each worker executes user code inside isolated containers or stronger sandbox runtimes.
+Submissions are pushed into a queue, and Kubernetes helps distribute jobs and scale workers automatically.
+
+Best for
+- large-scale contest traffic
+- autoscaling
+- high availability
+- better worker orchestration
+- easier long-term operations at scale
+
+Tradeoff
+- more setup and operational complexity
+
+2. Docker-based approach
+
+Use `Docker` directly on worker machines.
+Each submission runs inside a fresh Docker container for the selected language.
+Results are stored in `PostgreSQL`, and a queue is used to handle bursty submission traffic.
+
+Practical code storage in this Docker approach
+- store starter code per language in `PostgreSQL` as `JSONB`
+- example field: `starter_code_by_language_jsonb`
+- keep hidden test cases in object storage or a secure internal store
+- store user submitted code in the submission record or as a blob referenced by `source_code_path`
+- if problem templates change, keep versioned JSON snapshots in a separate problem-version table
+
+Best for
+- MVP (minimum viable product)
+- small to medium traffic
+- fast implementation
+- simpler infrastructure
+- practical interview explanation
+
+Tradeoff
+==============
+- weaker orchestration than Kubernetes
+- harder to scale and manage at very large size
+
+3. Which is more practical?
+
+Short answer
+==================
+- `Docker` is more practical at the beginning.
+- `Kubernetes` is more practical at large scale.
+
+Why
+=======
+
+- `Docker + SQL + queue` is simpler, cheaper, and easier to ship.
+- `Kubernetes` becomes more useful when the system needs autoscaling, worker scheduling, recovery, and better reliability under heavy load.
+- a practical first version is often `PostgreSQL JSONB` for starter code, object storage for hidden tests, and Docker workers for execution
+
+4. Final conclusion
+
+If the goal is a practical first version, choose:
+- `Docker`
+
+If the goal is a production-grade system like a large LeetCode platform, choose:
+- `Kubernetes`

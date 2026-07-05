@@ -1,0 +1,246 @@
+LeetCode System Design Using Docker and SQL
+
+Short answer
+- Yes, this problem can be designed using `Docker` for code execution and `PostgreSQL` for durable storage.
+- This is a valid interview solution if you also explain Docker security limits and how to handle leaderboard scale.
+
+1. Problem brief
+
+We need to design a simplified LeetCode-like platform where users can:
+- browse coding problems
+- open a problem and code in multiple languages
+- submit code and get fast feedback
+- view a live leaderboard during competitions
+
+Main challenge
+- safely run untrusted code at scale
+- keep submission feedback fast
+- support many concurrent users during contests
+
+2. Core stack
+
+Use `Docker` for:
+- running user code in isolated containers
+- supporting multiple language runtimes like `Python`, `Java`, `C++`, `JavaScript`
+
+Use `PostgreSQL` for:
+- problems
+- submissions
+- competitions
+- scores
+- submission metadata and verdicts
+
+Practical code storage
+- store starter code per language in `PostgreSQL` as `JSONB`
+- keep hidden test cases on the server side, usually in object storage or a secure test-case store
+- store submitted user code in the `submissions` table for small payloads or object storage for larger source blobs
+- if problem content changes over time, keep versioned JSON snapshots in a `problem_versions` table
+
+Optional but recommended
+- `Redis` for caching and live leaderboard ranking
+- `Kafka`, `RabbitMQ`, or `SQS` for async submission jobs
+
+3. High-level architecture
+
+Components
+- Client
+- API Service
+- Problem Service
+- Submission Service
+- Judge Worker Service
+- Leaderboard Service
+- PostgreSQL
+- Job Queue
+- Docker Worker Pool
+
+Flow
+1. User requests problem list from API.
+2. API reads problems from PostgreSQL.
+3. User submits code.
+4. Submission Service stores submission metadata in PostgreSQL.
+5. Submission Service pushes a job to the queue.
+6. Judge Worker picks the job.
+7. Judge Worker starts a Docker container for the selected language.
+8. Code is compiled and executed against test cases.
+9. Final result is saved in PostgreSQL.
+10. Leaderboard is updated.
+
+4. Why Docker works here
+
+Each language gets its own Docker image.
+
+Examples
+- `python-runner:latest`
+- `java-runner:latest`
+- `cpp-runner:latest`
+
+Each submission runs in a fresh container with:
+- CPU limit
+- memory limit
+- time limit
+- no external network
+- read-only base image
+- auto cleanup after execution
+
+This gives:
+- language isolation
+- reproducible runtime
+- easier scaling of judge workers
+
+5. Important Docker caveat
+
+In interviews, do not say Docker alone is fully secure for arbitrary untrusted code.
+
+Better answer
+- Docker is the main execution unit.
+- Add security controls such as `seccomp`, `AppArmor`, dropping Linux capabilities, disabling network, and strict resource limits.
+- In a stronger production design, mention `gVisor` or `Firecracker` if deeper isolation is needed.
+
+6. Why SQL works here
+
+`PostgreSQL` is a good fit because the data is structured and relational.
+
+Store in SQL
+
+`problems`
+- problem_id
+- title
+- description
+- difficulty
+- tags
+- starter_code_by_language_jsonb
+
+Example `starter_code_by_language_jsonb`
+```json
+{
+  "python": "class Solution:\\n    def twoSum(self, nums, target):\\n        pass",
+  "java": "class Solution {\\n    public int[] twoSum(int[] nums, int target) {\\n    }\\n}",
+  "cpp": "class Solution {\\npublic:\\n    vector<int> twoSum(vector<int>& nums, int target) {\\n    }\\n};"
+}
+```
+
+`submissions`
+- submission_id
+- user_id
+- problem_id
+- language
+- source_code or source_code_path
+- status
+- verdict
+- runtime_ms
+- memory_kb
+- created_at
+
+`competitions`
+- competition_id
+- start_time
+- end_time
+
+`competition_scores`
+- competition_id
+- user_id
+- solved_count
+- penalty_score
+
+Why SQL is good
+- strong consistency for writes
+- easy joins and reporting
+- durable source of truth
+
+Practical recommendation
+- for most interview answers, say starter code is stored in `PostgreSQL JSONB`
+- if the starter code or problem statement needs history, store versioned JSON snapshots in a separate table
+- keep hidden test cases out of the client-facing database payload so users cannot access them
+
+7. Can SQL handle leaderboard?
+
+Yes, but with tradeoffs.
+
+SQL-only version
+- Store scores in `competition_scores`
+- Query top users with `ORDER BY solved_count DESC, penalty_score ASC`
+
+This works for:
+- small or medium traffic
+- simpler interview scope
+
+But under heavy live contest load:
+- repeated ranking queries become expensive
+- frequent updates and top-K reads can stress the database
+
+Better production answer
+- keep PostgreSQL as source of truth
+- use Redis sorted sets for the live leaderboard
+
+8. Submission pipeline
+
+Submission flow
+1. User sends source code.
+2. API validates language and payload size.
+3. Create submission row with status `QUEUED`.
+4. Push submission ID into queue.
+5. Worker loads code and test cases.
+6. Worker starts Docker container.
+7. Compile and run the code.
+8. Capture compile errors, runtime errors, timeout, memory limit, or accepted result.
+9. Save final verdict into PostgreSQL.
+
+Why queueing is important
+- submissions arrive in bursts
+- code execution is slow compared to normal API requests
+- queue prevents API overload
+
+9. Meeting the fast feedback requirement
+
+To return results quickly:
+- keep Docker images prebuilt
+- keep workers warm
+- run sample tests first
+- autoscale workers based on queue depth
+
+Practical interview answer
+- common submissions should finish in a few seconds
+- some heavy cases may take longer
+- return status updates like `QUEUED`, `RUNNING`, `DONE`
+
+10. Scaling approach
+
+API layer
+- scale horizontally behind a load balancer
+
+Judge workers
+- scale Docker workers horizontally
+- separate worker pools by language if needed
+
+Database
+- PostgreSQL primary for writes
+- read replicas for problem browsing
+
+Cache
+- cache hot problem lists
+- optionally use Redis for leaderboard and submission status
+
+11. Failure handling
+
+If a Docker container hangs
+- kill it on timeout
+
+If a worker crashes
+- retry the job from the queue
+
+If PostgreSQL is slow
+- use caching for read-heavy endpoints
+
+If contest traffic spikes
+- queue submissions and scale workers
+
+12. Best short interview conclusion
+
+Yes, I would use `Docker` and `PostgreSQL` for this system.
+
+- `Docker` runs each submission in an isolated language-specific environment.
+- `PostgreSQL` stores problems, submissions, competitions, and scores.
+- A queue is needed between the API and judge workers.
+- For a real-time leaderboard at large scale, I would add `Redis`, while keeping SQL as the durable source of truth.
+
+This is a solid and practical system design answer.
