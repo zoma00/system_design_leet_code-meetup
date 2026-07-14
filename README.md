@@ -1,8 +1,18 @@
 # LeetCode System Design Meetup Notes
 
+![System Design](https://img.shields.io/badge/System%20Design-Architecture%20Study-4F46E5)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-blue)
+
 Architecture-level notes for a simplified LeetCode-style platform discussed in a meetup setting.
 
+> **Repository scope:** System-design documentation and interview preparation. This repository proposes an architecture; it is not a deployed coding platform or runnable implementation.
+
 The design covers how users can:
+
 - browse coding problems
 - open a problem and write code in multiple languages
 - submit code and get fast feedback
@@ -12,21 +22,21 @@ The design covers how users can:
 
 This repo explores two practical system design approaches:
 
-- `Docker + PostgreSQL + queue`
-  A simpler and more practical first version for running user submissions, storing problem data, and handling bursty traffic.
-- `Kubernetes + worker pool + queue`
-  A more scalable long-term option for large contest traffic, autoscaling, and operational reliability.
+- **Docker + PostgreSQL + queue** — a practical first version for running user submissions, storing problem data, and handling bursty traffic.
+- **Kubernetes + worker pool + queue** — a scalable long-term option for large contest traffic, autoscaling, and operational reliability.
+
+## Architecture Flow
+
+<p align="center">
+  <img src="docs/system-design-flow.svg" width="100%" alt="Conceptual LeetCode-style system flow from clients through APIs, queued judging, isolated execution, result persistence, live status delivery, and leaderboard updates">
+</p>
 
 ## Repository Contents
 
-- `01_system_design_session.txt`
-  Full architecture-level solution for the LeetCode-style system design problem.
-- `02_system_design_docker_sql_solution.txt`
-  A Docker-focused solution using `PostgreSQL`, including practical starter-code storage using `JSONB`.
-- `03_kubernetes_vs_docker_comparison_note.txt`
-  Brief comparison between the Kubernetes-based and Docker-based approaches.
-- `04_docker_approach_detailed_steps.txt`
-  Step-by-step flow for the Docker approach, from submission to judging and result storage.
+- [`01_system_design_session.txt`](01_system_design_session.txt) — full architecture-level solution for the LeetCode-style system design problem.
+- [`02_system_design_docker_sql_solution.txt`](02_system_design_docker_sql_solution.txt) — Docker-focused solution using PostgreSQL, including starter-code storage with `JSONB`.
+- [`03_kubernetes_vs_docker_comparison_note.txt`](03_kubernetes_vs_docker_comparison_note.txt) — comparison between Kubernetes-based and Docker-based approaches.
+- [`04_docker_approach_detailed_steps.txt`](04_docker_approach_detailed_steps.txt) — step-by-step Docker flow from submission to judging and result storage.
 
 ## Key Design Points
 
@@ -40,6 +50,7 @@ This repo explores two practical system design approaches:
 ## Intended Use
 
 This repository is for:
+
 - meetup discussion
 - interview preparation
 - architecture review
@@ -47,4 +58,4 @@ This repository is for:
 
 ## License
 
-This project is licensed under the terms of the `MIT` license in `LICENSE`.
+This project is licensed under the terms of the [MIT License](LICENSE).
